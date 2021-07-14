@@ -13,6 +13,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
 
     quote!(
 
+        #[derive(Clone)]
         pub struct #bident{
             executable: Option<String>,
             args: Option<Vec<String>>,
@@ -47,6 +48,15 @@ pub fn derive(input: TokenStream) -> TokenStream {
             pub fn current_dir(&mut self, current_dir: String) -> &mut Self {
                 self.current_dir = Some(current_dir);
                 self
+            }
+            pub fn build(&mut self) -> Result<#name, Box<dyn std::error::Error>> {
+                let cloned = self.clone(); // Required to create value from builder without move
+                Ok(#name {
+                    executable: cloned.executable.ok_or("Executbale is not set")?,
+                    args: cloned.args.ok_or("Args is not set")?,
+                    env: cloned.env.ok_or("Env is not set")?,
+                    current_dir: cloned.current_dir.ok_or("Current dir is not set")?,
+                })
             }
         }
 
