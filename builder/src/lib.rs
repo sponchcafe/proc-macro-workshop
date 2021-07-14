@@ -11,54 +11,61 @@ pub fn derive(input: TokenStream) -> TokenStream {
     let bname = format!("{}Builder", name);
     let bident = Ident::new(&bname, name.span());
 
-    quote!(
+    let fields = if let syn::Data::Struct(syn::DataStruct {
+        fields: syn::Fields::Named(syn::FieldsNamed { ref named, .. }),
+        ..
+    }) = ast.data
+    {
+        named
+    } else {
+        unimplemented!();
+    };
 
-        #[derive(Clone)]
-        pub struct #bident{
-            executable: Option<String>,
-            args: Option<Vec<String>>,
-            env: Option<Vec<String>>,
-            current_dir: Option<String>
+    let optionized = fields.iter().map(|f| {
+        let name = &f.ident;
+        let ty = &f.ty;
+        quote! { #name: std::option::Option<#ty> }
+    });
+
+    let methods = fields.iter().map(|f| {
+        let name = &f.ident;
+        let ty = &f.ty;
+        quote! { 
+            pub fn #name(&mut self, #name: #ty) -> &mut Self {
+                self.#name = Some(#name); self
+            }
         }
+    });
+
+    let assignments = fields.iter().map(|f| {
+        let name = &f.ident;
+        let msg = format!("Field '{}' is not set", name.clone().unwrap().to_string());
+        quote! {
+            #name: self.#name.clone().ok_or(#msg)?
+        }
+    });
+
+    let expanded = quote!{
+
+        #[derive(Default)]
+        pub struct #bident{ #(#optionized,)* }
 
         impl #name{
             pub fn builder() -> #bident {
                 #bident{
-                    executable: None,
-                    args: None,
-                    env: None,
-                    current_dir: None,
+                    ..Default::default()
                 }
             }
         }
 
+        impl #bident { #(#methods)* }
+
         impl #bident {
-            pub fn executable(&mut self, executable: String) -> &mut Self {
-                self.executable = Some(executable);
-                self
-            }
-            pub fn args(&mut self, args: Vec<String>) -> &mut Self {
-                self.args = Some(args);
-                self
-            }
-            pub fn env(&mut self, env: Vec<String>) -> &mut Self {
-                self.env = Some(env);
-                self
-            }
-            pub fn current_dir(&mut self, current_dir: String) -> &mut Self {
-                self.current_dir = Some(current_dir);
-                self
-            }
             pub fn build(&mut self) -> Result<#name, Box<dyn std::error::Error>> {
-                let cloned = self.clone(); // Required to create value from builder without move
-                Ok(#name {
-                    executable: cloned.executable.ok_or("Executbale is not set")?,
-                    args: cloned.args.ok_or("Args is not set")?,
-                    env: cloned.env.ok_or("Env is not set")?,
-                    current_dir: cloned.current_dir.ok_or("Current dir is not set")?,
-                })
+                Ok(#name { #(#assignments,)*})
             }
         }
 
-    ).into()
+    };
+    expanded.into()
 }
