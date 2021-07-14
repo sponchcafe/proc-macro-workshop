@@ -39,9 +39,8 @@ pub fn derive(input: TokenStream) -> TokenStream {
 
     let assignments = fields.iter().map(|f| {
         let name = &f.ident;
-        let msg = format!("Field '{}' is not set", name.clone().unwrap().to_string());
         quote! {
-            #name: self.#name.clone().ok_or(#msg)?
+            #name: self.#name.clone().ok_or(concat!(stringify!(#name), " is not set"))?
         }
     });
 
@@ -61,11 +60,13 @@ pub fn derive(input: TokenStream) -> TokenStream {
         impl #bident { #(#methods)* }
 
         impl #bident {
-            pub fn build(&mut self) -> Result<#name, Box<dyn std::error::Error>> {
+            pub fn build(&self) -> Result<#name, Box<dyn std::error::Error>> {
                 Ok(#name { #(#assignments,)*})
             }
         }
 
     };
+
     expanded.into()
+
 }
