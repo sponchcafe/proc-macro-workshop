@@ -191,7 +191,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
         }
 
         impl #bident {
-            pub fn build(&self) -> Result<#name, Box<dyn std::error::Error>> {
+            pub fn build(&self) -> ::core::result::Result<#name, ::std::boxed::Box<dyn std::error::Error>> {
                 Ok(#name { #(#build_method,)*})
             }
         }
