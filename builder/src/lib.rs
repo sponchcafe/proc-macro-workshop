@@ -51,7 +51,8 @@ fn field_setter(f: &syn::Field) -> proc_macro2::TokenStream {
     }
 }
 
-fn field_extender(f: &syn::Field) -> Option<proc_macro2::TokenStream> {
+fn field_extender(f: &syn::Field) -> Option<(proc_macro2::TokenStream, bool)> {
+    let name = f.ident.as_ref().unwrap();
     let ty = &f.ty;
     let attrs = &f.attrs;
     for attr in attrs {
@@ -74,12 +75,17 @@ fn field_extender(f: &syn::Field) -> Option<proc_macro2::TokenStream> {
                     syn::Lit::Str(s) => {
                         let arg = Ident::new(&s.value(), s.span());
                         let ty = ty_inner_type(ty, "Vec").expect("'each'-type needs to be Vec<T>");
-                        return Some(quote!{ 
-                            pub fn #arg(&mut self, #arg: #ty) -> Self {
-                                self.name.push(#arg);
+                        return Some((
+                            quote!{ pub fn #arg(&mut self, #arg: #ty) -> &mut Self {
+                                if let Some(ref mut field) = self.#name {
+                                    field.push(#arg);
+                                }
+                                else {
+                                    self.#name = Some(vec![#arg]);
+                                }
                                 self
                             } 
-                        });
+                        }, &arg == name ));
                     }
                     tt => panic!("Expected string got {:?}", tt)
                 };
@@ -121,8 +127,18 @@ pub fn derive(input: TokenStream) -> TokenStream {
     };
 
     let optionized = fields.iter().map(|f| { optionize_field(&f) } );
-    let setters = fields.iter().map(|f| { field_setter(&f) } );
-    let extenders = fields.iter().filter_map(|f| { field_extender(&f) } );
+    let setters_extenders = fields.iter().filter_map(|f| { 
+        let setter  = field_setter(&f);
+        if let Some((mut extender, conflicts)) = field_extender(&f) {
+            if !conflicts {
+                extender.extend(setter);
+                let methods = extender;
+                return Some(methods);
+            }
+            return Some(extender);
+        }
+        Some(setter)
+    } );
     let build_method = fields.iter().map(|f| { build_method_assignments(&f) } );
 
     let expanded = quote!{
@@ -139,8 +155,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
         }
 
         impl #bident { 
-            #(#setters)* 
-            #(#extenders)*
+            #(#setters_extenders)* 
         }
 
         impl #bident {
