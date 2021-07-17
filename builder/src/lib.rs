@@ -25,9 +25,21 @@ fn ty_inner_type<'a>(ty: &'a syn::Type, wrapper: &'_ str) -> Option<&'a syn::Typ
     None
 }
 
+fn default_value(f: &syn::Field) -> proc_macro2::TokenStream {
+    let name = &f.ident;
+    match builder_of(f) {
+        Some(_) => quote! { #name: vec![] },
+             _  => quote! { #name: None }
+    }
+}
+    
+
 fn optionize_field(f: &syn::Field) -> proc_macro2::TokenStream {
     let name = &f.ident;
     let ty = &f.ty;
+    if let Some(_) = builder_of(f) {
+        return quote! { #name: #ty };
+    }
     match ty_inner_type(ty, "Option") {
         Some(_) => quote! { #name: #ty },
              _  => quote! { #name: std::option::Option<#ty> }
@@ -37,6 +49,14 @@ fn optionize_field(f: &syn::Field) -> proc_macro2::TokenStream {
 fn field_setter(f: &syn::Field) -> proc_macro2::TokenStream {
     let name = &f.ident;
     let ty = &f.ty;
+    if let Some(_) = builder_of(f) {
+        return quote! { 
+            pub fn #name(&mut self, #name: #ty) -> &mut Self {
+                self.#name = #name; self 
+            }
+        };
+    };
+
     match ty_inner_type(ty, "Option") {
         Some(inner) => quote! { 
             pub fn #name(&mut self, #name: #inner) -> &mut Self {
@@ -51,46 +71,47 @@ fn field_setter(f: &syn::Field) -> proc_macro2::TokenStream {
     }
 }
 
+fn builder_of(f: &syn::Field) -> Option<proc_macro2::Group> {
+    for attr in &f.attrs {
+        if attr.path.segments.len() == 1 && attr.path.segments[0].ident == "builder" {
+            if let Some(TokenTree::Group(g)) = attr.tokens.clone().into_iter().next() {
+                return Some(g);
+            }
+        }
+    }
+    None
+}
+
 fn field_extender(f: &syn::Field) -> Option<(proc_macro2::TokenStream, bool)> {
     let name = f.ident.as_ref().unwrap();
     let ty = &f.ty;
-    let attrs = &f.attrs;
-    for attr in attrs {
-        if attr.path.segments.len() == 1 && attrs[0].path.segments[0].ident == "builder" {
-            if let Some(TokenTree::Group(g)) = attr.tokens.clone().into_iter().next() {
-                let mut attr_tokens = g.stream().into_iter();
-                match attr_tokens.next().unwrap() {
-                    TokenTree::Ident(ref i) => assert_eq!(i, "each"),
-                    tt => panic!("Expected 'each' got {}", tt)
-                } 
-                match attr_tokens.next().unwrap() {
-                    TokenTree::Punct(ref p) => assert_eq!(p.as_char(), '='),
-                    tt => panic!("Expected '=' got {}", tt)
-                } 
-                let arg = match attr_tokens.next().unwrap() {
-                    TokenTree::Literal(l) => l,
-                    tt => panic!("Expected literal, got {}", tt)
-                };
-                match syn::Lit::new(arg) {
-                    syn::Lit::Str(s) => {
-                        let arg = Ident::new(&s.value(), s.span());
-                        let ty = ty_inner_type(ty, "Vec").expect("'each'-type needs to be Vec<T>");
-                        return Some((
-                            quote!{ pub fn #arg(&mut self, #arg: #ty) -> &mut Self {
-                                if let Some(ref mut field) = self.#name {
-                                    field.push(#arg);
-                                }
-                                else {
-                                    self.#name = Some(vec![#arg]);
-                                }
-                                self
-                            } 
-                        }, &arg == name ));
-                    }
-                    tt => panic!("Expected string got {:?}", tt)
-                };
+    if let Some(g) = builder_of(f){
+        let mut attr_tokens = g.stream().into_iter();
+        match attr_tokens.next().unwrap() {
+            TokenTree::Ident(ref i) => assert_eq!(i, "each"),
+            tt => panic!("Expected 'each' got {}", tt)
+        } 
+        match attr_tokens.next().unwrap() {
+            TokenTree::Punct(ref p) => assert_eq!(p.as_char(), '='),
+            tt => panic!("Expected '=' got {}", tt)
+        } 
+        let arg = match attr_tokens.next().unwrap() {
+            TokenTree::Literal(l) => l,
+            tt => panic!("Expected literal, got {}", tt)
+        };
+        match syn::Lit::new(arg) {
+            syn::Lit::Str(s) => {
+                let arg = Ident::new(&s.value(), s.span());
+                let ty = ty_inner_type(ty, "Vec").expect("'each'-type needs to be Vec<T>");
+                return Some((
+                    quote!{ pub fn #arg(&mut self, #arg: #ty) -> &mut Self {
+                        self.#name.push(#arg);
+                        self
+                    } 
+                }, &arg == name ));
             }
-        }
+            tt => panic!("Expected string got {:?}", tt)
+        };
     }
     None
 }
@@ -98,6 +119,10 @@ fn field_extender(f: &syn::Field) -> Option<(proc_macro2::TokenStream, bool)> {
 fn build_method_assignments(f: &syn::Field) -> proc_macro2::TokenStream {
     let name = &f.ident;
     let ty = &f.ty;
+    if let Some(_) = builder_of(f) {
+        return quote!{ #name: self.#name.clone() };
+    }
+
     match ty_inner_type(ty, "Option") {
         Some(_) => quote! { #name: self.#name.clone() },
              _  => quote! { 
@@ -126,6 +151,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
         unimplemented!();
     };
 
+    let default_values = fields.iter().map(|f| { default_value(&f) } );
     let optionized = fields.iter().map(|f| { optionize_field(&f) } );
     let setters_extenders = fields.iter().filter_map(|f| { 
         let setter  = field_setter(&f);
@@ -143,13 +169,12 @@ pub fn derive(input: TokenStream) -> TokenStream {
 
     let expanded = quote!{
 
-        #[derive(Default)]
         pub struct #bident{ #(#optionized,)* }
 
         impl #name{
             pub fn builder() -> #bident {
                 #bident{
-                    ..Default::default()
+                    #(#default_values,)*
                 }
             }
         }
