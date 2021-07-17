@@ -5,9 +5,10 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{parse_macro_input, DeriveInput, Ident};
 
-fn ty_inner_type(ty: &syn::Type) -> Option<&syn::Type> {
+fn ty_inner_type<'a>(ty: &'a syn::Type, wrapper: &'_ str) -> Option<&'a syn::Type> {
     if let syn::Type::Path(ref p) = ty {
-        if p.path.segments.len() != 1 || p.path.segments[0].ident != "Option" {
+
+        if p.path.segments.len() != 1 || p.path.segments[0].ident != wrapper {
             // Type is not something like Option<T>
             return None;
         }
@@ -22,6 +23,83 @@ fn ty_inner_type(ty: &syn::Type) -> Option<&syn::Type> {
         }
     }
     None
+}
+
+fn optionize_field(f: &syn::Field) -> proc_macro2::TokenStream {
+    let name = &f.ident;
+    let ty = &f.ty;
+    match ty_inner_type(ty, "Option") {
+        Some(_) => quote! { #name: #ty },
+             _  => quote! { #name: std::option::Option<#ty> }
+    }
+}
+
+fn field_setter(f: &syn::Field) -> proc_macro2::TokenStream {
+    let name = &f.ident;
+    let ty = &f.ty;
+    match ty_inner_type(ty, "Option") {
+        Some(inner) => quote! { 
+            pub fn #name(&mut self, #name: #inner) -> &mut Self {
+                self.#name = Some(#name); self
+            }
+        },
+        _ => quote! { 
+            pub fn #name(&mut self, #name: #ty) -> &mut Self {
+                self.#name = Some(#name); self
+            }
+        }
+    }
+}
+
+fn field_extender(f: &syn::Field) -> Option<proc_macro2::TokenStream> {
+    let ty = &f.ty;
+    let attrs = &f.attrs;
+    for attr in attrs {
+        if attr.path.segments.len() == 1 && attrs[0].path.segments[0].ident == "builder" {
+            if let Some(TokenTree::Group(g)) = attr.tokens.clone().into_iter().next() {
+                let mut attr_tokens = g.stream().into_iter();
+                match attr_tokens.next().unwrap() {
+                    TokenTree::Ident(ref i) => assert_eq!(i, "each"),
+                    tt => panic!("Expected 'each' got {}", tt)
+                } 
+                match attr_tokens.next().unwrap() {
+                    TokenTree::Punct(ref p) => assert_eq!(p.as_char(), '='),
+                    tt => panic!("Expected '=' got {}", tt)
+                } 
+                let arg = match attr_tokens.next().unwrap() {
+                    TokenTree::Literal(l) => l,
+                    tt => panic!("Expected literal, got {}", tt)
+                };
+                match syn::Lit::new(arg) {
+                    syn::Lit::Str(s) => {
+                        let arg = Ident::new(&s.value(), s.span());
+                        let ty = ty_inner_type(ty, "Vec").expect("'each'-type needs to be Vec<T>");
+                        return Some(quote!{ 
+                            pub fn #arg(&mut self, #arg: #ty) -> Self {
+                                self.name.push(#arg);
+                                self
+                            } 
+                        });
+                    }
+                    tt => panic!("Expected string got {:?}", tt)
+                };
+            }
+        }
+    }
+    None
+}
+
+fn build_method_assignments(f: &syn::Field) -> proc_macro2::TokenStream {
+    let name = &f.ident;
+    let ty = &f.ty;
+    match ty_inner_type(ty, "Option") {
+        Some(_) => quote! { #name: self.#name.clone() },
+             _  => quote! { 
+                 #name: self.#name.clone().ok_or(
+                     concat!(stringify!(#name), " is not set")
+                 )?  
+             }
+        }
 }
 
 #[proc_macro_derive(Builder, attributes(builder))]
@@ -42,93 +120,10 @@ pub fn derive(input: TokenStream) -> TokenStream {
         unimplemented!();
     };
 
-    let optionized = fields.iter().map(|f| {
-        let name = &f.ident;
-        let ty = &f.ty;
-        if ty_inner_type(ty).is_some() {
-            quote! { #name: #ty }
-        }
-        else {
-            quote! { #name: std::option::Option<#ty> }
-        }
-    });
-
-    let methods = fields.iter().map(|f| {
-        let name = &f.ident;
-        let ty = &f.ty;
-        if let Some(inner) = ty_inner_type(ty) {
-            quote! { 
-                pub fn #name(&mut self, #name: #inner) -> &mut Self {
-                    self.#name = Some(#name); self
-                }
-            }
-        }
-        else {
-            quote! { 
-                pub fn #name(&mut self, #name: #ty) -> &mut Self {
-                    self.#name = Some(#name); self
-                }
-            }
-        }
-    });
-
-    let extend_methods = fields.iter().filter_map(|f| {
-        let name = &f.ident;
-        let ty = &f.ty;
-        let attrs = &f.attrs;
-        for attr in attrs {
-            if attr.path.segments.len() == 1 && attrs[0].path.segments[0].ident == "builder" {
-                if let Some(TokenTree::Group(g)) = attr.tokens.clone().into_iter().next() {
-                    let mut attr_tokens = g.stream().into_iter();
-                    match attr_tokens.next().unwrap() {
-                        TokenTree::Ident(ref i) => assert_eq!(i, "each"),
-                        tt => panic!("Expected 'each' got {}", tt)
-                    } 
-                    match attr_tokens.next().unwrap() {
-                        TokenTree::Punct(ref p) => assert_eq!(p.as_char(), '='),
-                        tt => panic!("Expected '=' got {}", tt)
-                    } 
-                    let arg = match attr_tokens.next().unwrap() {
-                        TokenTree::Literal(l) => l,
-                        tt => panic!("Expected literal, got {}", tt)
-                    };
-                    match syn::Lit::new(arg) {
-                        syn::Lit::Str(s) => {
-                            let arg = Ident::new(&s.value(), s.span());
-                            return Some(quote!{ 
-                                pub fn #arg(&mut self, #arg: #ty) -> Self {
-                                    if self.#name.is_none() {
-                                        self.name = vec![#arg];
-                                    } else {
-                                        self.name.push(#arg);
-                                    }
-                                    self
-                                } 
-                            });
-                        }
-                        tt => panic!("Expected string got {:?}", tt)
-                    };
-                }
-            }
-        }
-        Some(quote! { /* ... */ })
-    });
-
-    let assignments = fields.iter().map(|f| {
-        let name = &f.ident;
-        let ty = &f.ty;
-        if ty_inner_type(ty).is_some() {
-            quote! {
-                #name: self.#name.clone()
-            }
-        }
-        else
-        {
-            quote! {
-                #name: self.#name.clone().ok_or(concat!(stringify!(#name), " is not set"))?
-            }
-        }
-    });
+    let optionized = fields.iter().map(|f| { optionize_field(&f) } );
+    let setters = fields.iter().map(|f| { field_setter(&f) } );
+    let extenders = fields.iter().filter_map(|f| { field_extender(&f) } );
+    let build_method = fields.iter().map(|f| { build_method_assignments(&f) } );
 
     let expanded = quote!{
 
@@ -144,13 +139,13 @@ pub fn derive(input: TokenStream) -> TokenStream {
         }
 
         impl #bident { 
-            #(#methods)* 
-            #(#extend_methods)*
+            #(#setters)* 
+            #(#extenders)*
         }
 
         impl #bident {
             pub fn build(&self) -> Result<#name, Box<dyn std::error::Error>> {
-                Ok(#name { #(#assignments,)*})
+                Ok(#name { #(#build_method,)*})
             }
         }
 
