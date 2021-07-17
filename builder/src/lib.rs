@@ -1,4 +1,6 @@
 extern crate proc_macro;
+extern crate proc_macro2;
+use proc_macro2::TokenTree;
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{parse_macro_input, DeriveInput, Ident};
@@ -22,7 +24,7 @@ fn ty_inner_type(ty: &syn::Type) -> Option<&syn::Type> {
     None
 }
 
-#[proc_macro_derive(Builder)]
+#[proc_macro_derive(Builder, attributes(builder))]
 pub fn derive(input: TokenStream) -> TokenStream {
 
     let ast = parse_macro_input!(input as DeriveInput);
@@ -70,6 +72,48 @@ pub fn derive(input: TokenStream) -> TokenStream {
         }
     });
 
+    let extend_methods = fields.iter().filter_map(|f| {
+        let name = &f.ident;
+        let ty = &f.ty;
+        let attrs = &f.attrs;
+        for attr in attrs {
+            if attr.path.segments.len() == 1 && attrs[0].path.segments[0].ident == "builder" {
+                if let Some(TokenTree::Group(g)) = attr.tokens.clone().into_iter().next() {
+                    let mut attr_tokens = g.stream().into_iter();
+                    match attr_tokens.next().unwrap() {
+                        TokenTree::Ident(ref i) => assert_eq!(i, "each"),
+                        tt => panic!("Expected 'each' got {}", tt)
+                    } 
+                    match attr_tokens.next().unwrap() {
+                        TokenTree::Punct(ref p) => assert_eq!(p.as_char(), '='),
+                        tt => panic!("Expected '=' got {}", tt)
+                    } 
+                    let arg = match attr_tokens.next().unwrap() {
+                        TokenTree::Literal(l) => l,
+                        tt => panic!("Expected literal, got {}", tt)
+                    };
+                    match syn::Lit::new(arg) {
+                        syn::Lit::Str(s) => {
+                            let arg = Ident::new(&s.value(), s.span());
+                            return Some(quote!{ 
+                                pub fn #arg(&mut self, #arg: #ty) -> Self {
+                                    if self.#name.is_none() {
+                                        self.name = vec![#arg];
+                                    } else {
+                                        self.name.push(#arg);
+                                    }
+                                    self
+                                } 
+                            });
+                        }
+                        tt => panic!("Expected string got {:?}", tt)
+                    };
+                }
+            }
+        }
+        Some(quote! { /* ... */ })
+    });
+
     let assignments = fields.iter().map(|f| {
         let name = &f.ident;
         let ty = &f.ty;
@@ -99,7 +143,10 @@ pub fn derive(input: TokenStream) -> TokenStream {
             }
         }
 
-        impl #bident { #(#methods)* }
+        impl #bident { 
+            #(#methods)* 
+            #(#extend_methods)*
+        }
 
         impl #bident {
             pub fn build(&self) -> Result<#name, Box<dyn std::error::Error>> {
