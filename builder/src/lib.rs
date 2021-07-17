@@ -4,6 +4,7 @@ use proc_macro2::TokenTree;
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{parse_macro_input, DeriveInput, Ident};
+use syn::spanned::Spanned;
 
 fn ty_inner_type<'a>(ty: &'a syn::Type, wrapper: &'_ str) -> Option<&'a syn::Type> {
     if let syn::Type::Path(ref p) = ty {
@@ -88,7 +89,13 @@ fn field_extender(f: &syn::Field) -> Option<(proc_macro2::TokenStream, bool)> {
     if let Some(g) = builder_of(f){
         let mut attr_tokens = g.stream().into_iter();
         match attr_tokens.next().unwrap() {
-            TokenTree::Ident(ref i) => assert_eq!(i, "each"),
+            TokenTree::Ident(ref i) => {
+                if i != "each" {
+                    let span = f.attrs[0].path.span().join(g.span()); // Combine spans from path and group
+                    let err = syn::Error::new(span.unwrap(), "expected `builder(each = \"...\")`");
+                    return Some((err.into_compile_error(), false));
+                }
+            }
             tt => panic!("Expected 'each' got {}", tt)
         } 
         match attr_tokens.next().unwrap() {
