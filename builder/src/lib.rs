@@ -38,12 +38,9 @@ fn default_value(f: &syn::Field) -> proc_macro2::TokenStream {
 fn optionize_field(f: &syn::Field) -> proc_macro2::TokenStream {
     let name = &f.ident;
     let ty = &f.ty;
-    if let Some(_) = builder_of(f) {
-        return quote! { #name: #ty };
-    }
-    match ty_inner_type(ty, "Option") {
-        Some(_) => quote! { #name: #ty },
-             _  => quote! { #name: std::option::Option<#ty> }
+    match (builder_of(f), ty_inner_type(ty, "Option")) {
+        (Some(_), _) | (_, Some(_)) => quote! { #name: #ty },
+        _  => quote! { #name: std::option::Option<#ty> }
     }
 }
 
