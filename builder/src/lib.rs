@@ -6,6 +6,7 @@ use quote::quote;
 use syn::spanned::Spanned;
 use syn::{parse_macro_input, DeriveInput, Ident};
 
+/// Extract a type `inner` from a type type `ty` like `wrapper<inner>`.
 fn ty_inner_type<'a>(ty: &'a syn::Type, wrapper: &'_ str) -> Option<&'a syn::Type> {
     if let syn::Type::Path(ref p) = ty {
         if p.path.segments.len() != 1 || p.path.segments[0].ident != wrapper {
@@ -27,6 +28,8 @@ fn ty_inner_type<'a>(ty: &'a syn::Type, wrapper: &'_ str) -> Option<&'a syn::Typ
     None
 }
 
+/// Generate default value for field `f`. Default for regular builder fields is
+/// None, for repeated fields it is an empty `Vec`.
 fn default_value(f: &syn::Field) -> proc_macro2::TokenStream {
     let name = &f.ident;
     match builder_of(f) {
@@ -35,6 +38,9 @@ fn default_value(f: &syn::Field) -> proc_macro2::TokenStream {
     }
 }
 
+/// Apply option wrapper to field `f`.The option wrapper is only applied to
+/// regular fields. Optional fields are stored as their original (already)
+/// Option<T> type. Repeatable fields are stored as `Vec`.
 fn optionize_field(f: &syn::Field) -> proc_macro2::TokenStream {
     let name = &f.ident;
     let ty = &f.ty;
@@ -44,6 +50,8 @@ fn optionize_field(f: &syn::Field) -> proc_macro2::TokenStream {
     }
 }
 
+/// Generate setter for field `f`. Regular builder types are set as a Some.
+/// Optional and repeatable types are set as is.
 fn field_setter(f: &syn::Field) -> proc_macro2::TokenStream {
     let name = &f.ident;
     let ty = &f.ty;
@@ -64,6 +72,8 @@ fn field_setter(f: &syn::Field) -> proc_macro2::TokenStream {
     }
 }
 
+/// Check if a field `f` has the `builder` attribute set on it.
+/// If so, returns the containing builder token group `each = "<ident>"`.
 fn builder_of(f: &syn::Field) -> Option<proc_macro2::Group> {
     for attr in &f.attrs {
         if attr.path.segments.len() == 1 && attr.path.segments[0].ident == "builder" {
@@ -75,6 +85,10 @@ fn builder_of(f: &syn::Field) -> Option<proc_macro2::Group> {
     None
 }
 
+/// Generate field extender for repeateable field `f`.
+/// Checks the builder attribute pattern `each = "<ident>"`. If the field is a
+/// repeatanble field, returns an extension method. Also returns a boolean
+/// indicating if the extension method collides with the regular setter.
 fn field_extender(f: &syn::Field) -> Option<(proc_macro2::TokenStream, bool)> {
     let name = f.ident.as_ref().unwrap();
     let ty = &f.ty;
@@ -117,6 +131,7 @@ fn field_extender(f: &syn::Field) -> Option<(proc_macro2::TokenStream, bool)> {
     None
 }
 
+/// Generate the assignment of field `f` inside the build method.
 fn build_method_assignments(f: &syn::Field) -> proc_macro2::TokenStream {
     let name = &f.ident;
     let ty = &f.ty;
@@ -163,8 +178,10 @@ pub fn derive(input: TokenStream) -> TokenStream {
     });
     let build_method = fields.iter().map(|f| build_method_assignments(&f));
 
+    let builder_doc = format!("Implements the builder pattern for {}", name);
     let expanded = quote! {
 
+        #[doc = #builder_doc]
         pub struct #bident{ #(#optionized,)* }
 
         impl #name{
