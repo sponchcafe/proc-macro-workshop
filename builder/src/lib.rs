@@ -50,24 +50,19 @@ fn optionize_field(f: &syn::Field) -> proc_macro2::TokenStream {
 fn field_setter(f: &syn::Field) -> proc_macro2::TokenStream {
     let name = &f.ident;
     let ty = &f.ty;
-    if let Some(_) = builder_of(f) {
-        return quote! { 
-            pub fn #name(&mut self, #name: #ty) -> &mut Self {
-                self.#name = #name; self 
-            }
-        };
+
+    let init = match builder_of(f) {
+        Some(_) => quote!{ #name },
+             _  => quote!{ Some(#name) },
     };
 
-    match ty_inner_type(ty, "Option") {
-        Some(inner) => quote! { 
-            pub fn #name(&mut self, #name: #inner) -> &mut Self {
-                self.#name = Some(#name); self
-            }
-        },
-        _ => quote! { 
-            pub fn #name(&mut self, #name: #ty) -> &mut Self {
-                self.#name = Some(#name); self
-            }
+    let ty = match ty_inner_type(ty, "Option") {
+        Some(inner) => quote! { #inner },
+                  _ => quote! { #ty }
+    };
+    quote! {
+        pub fn #name(&mut self, #name: #ty) -> &mut Self {
+            self.#name = #init; self
         }
     }
 }
